@@ -207,13 +207,30 @@ async function handleToolSearch(req, res, url) {
   const page = clampInt(url.searchParams.get('page'), 1, 1, 1000);
   const perPage = clampInt(url.searchParams.get('per_page'), 25, 1, 100);
 
+  // Optional location filter on the candidate's city field ("Goa, Pune" = either). "any" or empty = no filter.
+  const cities = String(url.searchParams.get('city') || '')
+    .split(',').map((s) => s.trim()).filter((s) => s && !/^(any|none|null|all)$/i.test(s)).slice(0, 10);
+
   const qs = new URLSearchParams({ query, page: String(page), per_page: String(perPage) });
-  const r = await fetch(`${CATS}/candidates/search?${qs}`, { headers: { Authorization: `Token ${cfg.catsKey}` } });
+  const headers = { Authorization: `Token ${cfg.catsKey}` };
+  let r;
+  if (cities.length) {
+    // Goa is a state, not a city, so each name is matched against city OR state.
+    const filter = { or: cities.flatMap((c) => [
+      { field: 'address.city', filter: 'contains', value: c },
+      { field: 'address.state', filter: 'contains', value: c },
+    ]) };
+    r = await fetch(`${CATS}/candidates/search?${qs}`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(filter),
+    });
+  } else {
+    r = await fetch(`${CATS}/candidates/search?${qs}`, { headers });
+  }
   if (!r.ok) return json(res, 502, { error: `CATS returned ${r.status}` });
   const data = await r.json();
   const list = data?._embedded?.candidates || [];
   json(res, 200, {
-    query, page, per_page: perPage,
+    query, city_filter: cities.length ? cities : null, page, per_page: perPage,
     total: data.total ?? null,
     total_pages: data.total != null ? Math.ceil(data.total / perPage) : null,
     candidates: list.map((c) => ({
