@@ -78,6 +78,13 @@
   .ai-read { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 5px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: #6B21A8; white-space: nowrap;
     background: linear-gradient(#fff, #fff) padding-box, linear-gradient(90deg, #38BDF8, #A21CAF, #F97316) border-box; border: 1.5px solid transparent; cursor: default; }
   .ai-read img { width: 16px; height: 16px; object-fit: contain; }
+  .fit-wrap { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .fit { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; min-height: 26px; border-radius: 999px; border: 0; background: #DCFCE7; color: #166534; font: inherit; font-size: 12px; font-weight: 700; cursor: help; }
+  .fit:focus-visible { outline: 2px solid #16A34A; outline-offset: 2px; }
+  .fit-hint { font-size: 10.5px; color: var(--subtle); }
+  .fit-tip { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 260px; padding: 10px 12px; border-radius: 10px; background: var(--ink); color: #fff;
+    font-size: 12.5px; line-height: 1.45; font-weight: 400; text-align: left; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.25); visibility: hidden; opacity: 0; transition: opacity .12s; }
+  .fit-wrap:hover .fit-tip, .fit:focus-visible + .fit-tip, .fit-wrap.open .fit-tip { visibility: visible; opacity: 1; }
   .facts { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
   .facts:empty { display: none; }
   .fact { font-size: 12.5px; line-height: 1.4; padding: 3px 10px; border-radius: 999px; background: var(--soft); color: #334155; }
@@ -103,7 +110,8 @@
     header { padding: 12px 16px; }
     .brand .sep, .brand .mod { display: none; }
     #log { padding: 20px 16px; } .dock { padding: 10px 16px 16px; }
-    .card { flex-wrap: wrap; } .card .info { flex: 1 1 calc(100% - 54px); } .card .actions { margin-left: 54px; flex-direction: row; align-items: center; flex-wrap: wrap; }
+    .card { flex-wrap: wrap; } .card .info { flex: 1 1 calc(100% - 54px); } .card .actions { margin-left: 54px; flex: 1 1 calc(100% - 54px); min-width: 0; flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
+    .fit-wrap { align-items: flex-start; } .fit-tip { left: 0; right: auto; width: min(260px, 70vw); }
     .msg-user { max-width: 90%; }
   }
   @media (prefers-reduced-motion: reduce) { .skel, .typing span, .fact.loading { animation: none; } }
@@ -295,9 +303,10 @@
 
   function parseCandidates(s) {
     try { const a = JSON.parse(s.trim()); if (Array.isArray(a)) return a; } catch (_) { /* fall through to lenient parse */ }
-    const field = (o, k) => { const m = o.match(new RegExp(`"${k}"\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|(null|-?\\d+))`)); return m ? (m[1] !== undefined ? m[1].replace(/\\"/g, '"') : (m[2] === 'null' ? null : Number(m[2]))) : null; };
+    const field = (o, k) => { const m = o.match(new RegExp(`"${k}"\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|(null|true|false|-?\\d+))`)); if (!m) return null; if (m[1] !== undefined) return m[1].replace(/\\"/g, '"'); return m[2] === 'null' ? null : m[2] === 'true' ? true : m[2] === 'false' ? false : Number(m[2]); };
     return (s.match(/\{[^{}]*\}/g) || []).map((o) => ({
       id: field(o, 'id'), name: field(o, 'name'), title: field(o, 'title'), city: field(o, 'city'), updated: field(o, 'updated'), why: field(o, 'why'),
+      best_fit: field(o, 'best_fit'), fit_reason: field(o, 'fit_reason'),
     })).filter((c) => c.name || c.id);
   }
 
@@ -320,6 +329,7 @@
       a.href = `/api/resume/${c.id}`; a.target = '_blank'; a.rel = 'noopener';
       a.setAttribute('aria-label', `View resume for ${name}`);
       actions.appendChild(a);
+      if (c.best_fit === true) actions.appendChild(bestFitTag(c.fit_reason || c.why || ''));
       el.appendChild(actions);
     }
     const known = profiles.get(String(c.id));
@@ -444,7 +454,24 @@
     const b = document.createElement('span'); b.className = 'ai-read';
     b.title = 'HR Copilot opened and read this resume while answering, so its summary is based on the resume itself.';
     b.innerHTML = '<img src="/assets/tangentia-mark.png" alt="" aria-hidden="true"><span>Read by Copilot</span>';
-    actions.appendChild(b);
+    const fit = actions.querySelector('.fit-wrap');
+    if (fit) actions.insertBefore(b, fit); else actions.appendChild(b);
+  }
+  // "Best fit" tag: the copilot's judgement after reading the resume. Reason shows on hover, focus or tap.
+  let tipSeq = 0;
+  function bestFitTag(reason) {
+    const wrap = document.createElement('div'); wrap.className = 'fit-wrap';
+    const id = `fit-tip-${++tipSeq}`;
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'fit';
+    btn.setAttribute('aria-describedby', id);
+    btn.innerHTML = '<svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3l-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8z"/></svg><span>Best fit</span>';
+    const tip = document.createElement('span'); tip.className = 'fit-tip'; tip.id = id; tip.setAttribute('role', 'tooltip');
+    tip.textContent = reason || 'The copilot rated this candidate a strong match.';
+    btn.addEventListener('click', () => wrap.classList.toggle('open'));
+    btn.addEventListener('blur', () => wrap.classList.remove('open'));
+    const hint = document.createElement('span'); hint.className = 'fit-hint'; hint.textContent = window.matchMedia('(hover: none)').matches ? 'tap for why' : 'hover for why';
+    wrap.append(btn, tip, hint);
+    return wrap;
   }
   function factButton(text, onClick) {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'fact-btn'; b.textContent = text;
