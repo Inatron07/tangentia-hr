@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HR Hub · Talent copilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0F172A; --muted: #475569; --subtle: #64748B; --line: #E2E8F0; --line-strong: #CBD5E1;
+    --soft: #F1F5F9; --bg: #FFFFFF; --accent: #0F766E; --accent-ink: #FFFFFF; --warn-bg: #FEF3C7; --warn-ink: #92400E;
+    --avatar-bg: #E0F2FE; --avatar-ink: #075985;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; min-height: 100vh; }
+  button, textarea { font: inherit; color: inherit; }
+  a { color: var(--accent); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; border-bottom: 1px solid transparent; }
+  body.chatting header { border-bottom-color: var(--soft); }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .logo { width: 32px; height: 32px; border-radius: 9px; background: var(--ink); color: #fff; display: grid; place-items: center; font: 800 13px Manrope, sans-serif; flex-shrink: 0; }
+  .brand b { font: 700 16px Manrope, sans-serif; }
+  .brand .sep { color: var(--line-strong); }
+  .brand .mod { color: var(--muted); font-size: 15px; white-space: nowrap; }
+  .new-chat { display: none; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+  body.chatting .new-chat { display: inline-flex; }
+  .new-chat:hover { background: var(--soft); }
+
+  /* empty state */
+  #empty { flex-grow: 1; display: flex; align-items: center; justify-content: center; padding: 24px 24px 12vh; }
+  #empty .inner { width: 100%; max-width: 720px; display: flex; flex-direction: column; align-items: center; gap: 28px; }
+  #empty h1 { margin: 0; text-align: center; font: 800 clamp(28px, 4vw, 38px)/1.15 Manrope, sans-serif; letter-spacing: -0.02em; }
+  #empty p { margin: 8px 0 0; text-align: center; color: var(--muted); font-size: 16px; }
+  body.chatting #empty { display: none; }
+
+  /* composer */
+  .composer { width: 100%; display: flex; align-items: flex-end; gap: 10px; border: 1px solid var(--line-strong); border-radius: 18px; padding: 10px 10px 10px 16px; background: #fff; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
+  .composer:focus-within { border-color: var(--accent); }
+  .composer textarea { flex-grow: 1; border: 0; outline: none; resize: none; background: transparent; font-size: 16px; line-height: 1.5; padding: 10px 0; max-height: 200px; }
+  #empty .composer { flex-direction: column; align-items: stretch; padding: 16px 16px 12px; border-radius: 20px; }
+  #empty .composer textarea { font-size: 17px; min-height: 84px; padding: 0; }
+  #empty .composer .row { display: flex; justify-content: flex-end; }
+  .send { width: 44px; height: 44px; border: 0; border-radius: 12px; background: var(--accent); display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
+  .send:disabled { opacity: 0.45; cursor: default; }
+
+  /* conversation */
+  #chat { display: none; flex-grow: 1; flex-direction: column; }
+  body.chatting #chat { display: flex; }
+  #log { flex-grow: 1; display: flex; justify-content: center; padding: 32px 24px 24px; }
+  #log .col { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 22px; }
+  .dock { position: sticky; bottom: 0; display: flex; justify-content: center; padding: 12px 24px 20px; background: linear-gradient(rgba(255,255,255,0), #fff 24%); }
+  .dock .composer { max-width: 760px; }
+  .hint { max-width: 760px; width: 100%; margin: 8px auto 0; text-align: center; font-size: 12px; color: var(--subtle); }
+
+  .msg-user { align-self: flex-end; max-width: 80%; background: var(--soft); padding: 12px 16px; border-radius: 18px 18px 4px 18px; font-size: 15px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg-ai { display: flex; gap: 12px; align-items: flex-start; }
+  .msg-ai .av { width: 32px; height: 32px; border-radius: 9px; background: var(--accent); color: #fff; display: grid; place-items: center; font: 800 12px Manrope, sans-serif; flex-shrink: 0; }
+  .msg-ai .body { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; font-size: 15px; line-height: 1.6; }
+  .msg-ai .body p { margin: 0; overflow-wrap: anywhere; }
+  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .status code { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; background: var(--soft); border-radius: 6px; padding: 2px 6px; overflow-wrap: anywhere; }
+  .error { color: #9F1239; }
+
+  .card { display: flex; gap: 14px; align-items: flex-start; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; }
+  .card .ini { width: 40px; height: 40px; border-radius: 50%; background: var(--avatar-bg); color: var(--avatar-ink); display: grid; place-items: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+  .card .info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .card .name { font-weight: 700; font-size: 15px; }
+  .card .meta { font-size: 13px; color: var(--muted); }
+  .card .why { font-size: 14px; color: #334155; }
+  .card .stale { display: inline-block; font-size: 12px; font-weight: 600; color: var(--warn-ink); background: var(--warn-bg); border-radius: 999px; padding: 1px 8px; margin-left: 4px; }
+  .card .open { min-height: 40px; padding: 0 14px; display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+  .card .open:hover { background: var(--soft); }
+  .skel { height: 72px; border-radius: 14px; background: linear-gradient(90deg, var(--soft), #F8FAFC, var(--soft)); background-size: 200% 100%; animation: sh 1.2s infinite linear; }
+  @keyframes sh { to { background-position: -200% 0; } }
+  .typing span { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: var(--subtle); animation: bl 1s infinite; }
+  .typing span:nth-child(2) { animation-delay: .15s; } .typing span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bl { 50% { opacity: .25; } }
+
+  @media (max-width: 560px) {
+    header { padding: 12px 16px; }
+    .brand .sep, .brand .mod { display: none; }
+    #log { padding: 20px 16px; } .dock { padding: 10px 16px 16px; }
+    .card { flex-wrap: wrap; } .card .info { flex: 1 1 calc(100% - 54px); } .card .open { margin-left: 54px; }
+    .msg-user { max-width: 90%; }
+  }
+  @media (prefers-reduced-motion: reduce) { .skel, .typing span { animation: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo" aria-hidden="true">HR</div>
+    <b>HR Hub</b><span class="sep" aria-hidden="true">/</span><span class="mod">Talent copilot</span>
+  </div>
+  <button type="button" class="new-chat" id="newChat">
+    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New chat
+  </button>
+</header>
+
+<section id="empty" aria-labelledby="hello">
+  <div class="inner">
+    <div>
+      <h1 id="hello">Who are you hiring today?</h1>
+      <p>Describe the role. I'll search every resume in CATS and shortlist the best fits.</p>
+    </div>
+    <form class="composer" id="firstForm">
+      <label for="firstInput" class="sr">Message the talent copilot</label>
+      <textarea id="firstInput" rows="3" placeholder="e.g. Need 3 React developers in Goa or Pune, updated in the last year"></textarea>
+      <div class="row">
+        <button class="send" type="submit" aria-label="Send">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section id="chat" aria-label="Conversation">
+  <div id="log"><div class="col" id="col" aria-live="polite"></div></div>
+  <div class="dock">
+    <div style="width:100%;max-width:760px">
+      <form class="composer" id="form">
+        <label for="input" class="sr">Message the talent copilot</label>
+        <textarea id="input" rows="1" placeholder="Ask a follow-up"></textarea>
+        <button class="send" id="sendBtn" type="submit" aria-label="Send">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+      </form>
+      <p class="hint">Answers come from your CATS data. Check details before contacting candidates.</p>
+    </div>
+  </div>
+</section>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const col = $('col'), input = $('input'), firstInput = $('firstInput'), sendBtn = $('sendBtn');
+  let chatId = null, busy = false;
+
+  // ---------- sending ----------
+  $('firstForm').addEventListener('submit', (e) => { e.preventDefault(); send(firstInput.value); });
+  $('form').addEventListener('submit', (e) => { e.preventDefault(); send(input.value); });
+  for (const ta of [input, firstInput]) {
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); ta.form.requestSubmit(); }
+    });
+    ta.addEventListener('input', () => { if (ta === input) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; } });
+  }
+  $('newChat').addEventListener('click', () => {
+    if (busy) return;
+    chatId = null; col.innerHTML = ''; document.body.classList.remove('chatting'); firstInput.value = ''; firstInput.focus();
+  });
+  firstInput.focus();
+
+  async function send(text) {
+    text = text.trim();
+    if (!text || busy) return;
+    busy = true; sendBtn.disabled = true;
+    document.body.classList.add('chatting');
+    input.value = ''; input.style.height = 'auto'; firstInput.value = '';
+
+    const u = document.createElement('div'); u.className = 'msg-user'; u.textContent = text; col.appendChild(u);
+    const ai = aiBubble(); col.appendChild(ai.el);
+    scrollDown();
+
+    let raw = '';
+    try {
+      const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, chatId }) });
+      if (!res.ok || !res.body) throw new Error((await res.json().catch(() => ({}))).error || `Request failed (${res.status})`);
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) !== -1) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          const ev = (block.match(/^event: (.*)$/m) || [])[1];
+          const data = JSON.parse((block.match(/^data: (.*)$/m) || [, '{}'])[1]);
+          if (ev === 'chat') chatId = data.chatId;
+          else if (ev === 'chunk') { raw += data.text; ai.render(raw, true); scrollDown(true); }
+          else if (ev === 'error') throw new Error(data.message);
+        }
+      }
+      ai.render(raw, false);
+      if (!raw.trim()) ai.error('No answer came back. Please try again.');
+    } catch (err) {
+      ai.render(raw, false);
+      ai.error(err.message || 'Something went wrong.');
+    } finally {
+      busy = false; sendBtn.disabled = false; input.focus(); scrollDown(true);
+    }
+  }
+
+  function scrollDown(soft) {
+    const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 220;
+    if (!soft || nearBottom) window.scrollTo({ top: document.body.scrollHeight, behavior: soft ? 'auto' : 'smooth' });
+  }
+
+  // ---------- assistant message rendering ----------
+  function aiBubble() {
+    const el = document.createElement('div'); el.className = 'msg-ai';
+    el.innerHTML = '<div class="av" aria-hidden="true">AI</div><div class="body"><div class="typing" aria-label="Thinking"><span></span><span></span><span></span></div></div>';
+    const body = el.querySelector('.body');
+    let errEl = null;
+    return {
+      el,
+      render(raw, streaming) {
+        const parts = parseReply(raw, streaming);
+        body.replaceChildren(...parts);
+        if (errEl) body.appendChild(errEl);
+      },
+      error(msg) { errEl = document.createElement('p'); errEl.className = 'error'; errEl.textContent = msg; body.appendChild(errEl); },
+    };
+  }
+
+  // The agent writes: preamble [[SEARCH]]{json}[[/SEARCH]] intro [[CANDIDATES]][json][[/CANDIDATES]] outro
+  function parseReply(raw, streaming) {
+    const out = [];
+    const sIdx = raw.indexOf('[[SEARCH]]');
+    const cIdx = raw.indexOf('[[CANDIDATES]]');
+    const hasMarkers = sIdx !== -1 || cIdx !== -1;
+
+    if (!hasMarkers) {
+      const text = streaming ? hideHalfMarker(raw) : raw;
+      if (text.trim()) out.push(...paragraphs(text));
+      else if (streaming) out.push(typing());
+      return out;
+    }
+
+    let rest = raw.slice(sIdx !== -1 ? sIdx : cIdx);
+    // search block
+    if (rest.startsWith('[[SEARCH]]')) {
+      const end = rest.indexOf('[[/SEARCH]]');
+      if (end === -1) { out.push(statusLine('Searching CATS…')); out.push(skeleton()); return out; }
+      const s = parseSearch(rest.slice(10, end));
+      out.push(statusLine(s.total != null ? `Searched CATS · ${s.total.toLocaleString()} matches` : 'Searched CATS', s.query));
+      rest = rest.slice(end + 11);
+    }
+    // intro + candidates
+    const c = rest.indexOf('[[CANDIDATES]]');
+    if (c === -1) {
+      const text = streaming ? hideHalfMarker(rest) : rest;
+      if (text.trim()) out.push(...paragraphs(text));
+      if (streaming) out.push(skeleton());
+      return out;
+    }
+    if (rest.slice(0, c).trim()) out.push(...paragraphs(rest.slice(0, c)));
+    const cEnd = rest.indexOf('[[/CANDIDATES]]');
+    if (cEnd === -1) { out.push(skeleton()); return out; }
+    const list = parseCandidates(rest.slice(c + 14, cEnd));
+    if (list.length) list.forEach((cand) => out.push(card(cand)));
+    else out.push(...paragraphs('No candidates could be read from this answer.'));
+    const outro = rest.slice(cEnd + 15);
+    if (outro.trim()) out.push(...paragraphs(outro));
+    return out;
+  }
+
+  function hideHalfMarker(t) { const i = t.lastIndexOf('[['); return i !== -1 && !t.slice(i).includes(']]') ? t.slice(0, i) : t; }
+
+  function parseSearch(s) {
+    const q = (s.match(/"query"\s*:\s*"([\s\S]*?)"\s*,\s*"total"/) || s.match(/"query"\s*:\s*"([\s\S]*?)"\s*\}/) || [])[1];
+    const t = (s.match(/"total"\s*:\s*(\d+)/) || [])[1];
+    return { query: q ? q.replace(/\\"/g, '"') : '', total: t != null ? Number(t) : null };
+  }
+
+  function parseCandidates(s) {
+    try { const a = JSON.parse(s.trim()); if (Array.isArray(a)) return a; } catch (_) { /* fall through to lenient parse */ }
+    const field = (o, k) => { const m = o.match(new RegExp(`"${k}"\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|(null|-?\\d+))`)); return m ? (m[1] !== undefined ? m[1].replace(/\\"/g, '"') : (m[2] === 'null' ? null : Number(m[2]))) : null; };
+    return (s.match(/\{[^{}]*\}/g) || []).map((o) => ({
+      id: field(o, 'id'), name: field(o, 'name'), title: field(o, 'title'), city: field(o, 'city'), updated: field(o, 'updated'), why: field(o, 'why'),
+    })).filter((c) => c.name || c.id);
+  }
+
+  function card(c) {
+    const el = document.createElement('article'); el.className = 'card';
+    const name = String(c.name || 'Unnamed candidate');
+    const ini = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
+    const meta = [c.title, c.city, c.updated ? `updated ${fmtDate(c.updated)}` : null].filter(Boolean).join(' · ');
+    const stale = isStale(c.updated);
+    el.innerHTML = `<div class="ini" aria-hidden="true"></div><div class="info"><span class="name"></span><span class="meta"></span><span class="why"></span></div>`;
+    el.querySelector('.ini').textContent = ini;
+    el.querySelector('.name').textContent = name;
+    const metaEl = el.querySelector('.meta'); metaEl.textContent = meta || 'Profile details not on file';
+    if (stale) { const b = document.createElement('span'); b.className = 'stale'; b.textContent = 'over 2 years old'; metaEl.appendChild(b); }
+    if (c.why) el.querySelector('.why').textContent = c.why; else el.querySelector('.why').remove();
+    if (c.id && /^\d+$/.test(String(c.id))) {
+      const a = document.createElement('a'); a.className = 'open'; a.textContent = 'View resume';
+      a.href = `/api/resume/${c.id}`; a.target = '_blank'; a.rel = 'noopener';
+      a.setAttribute('aria-label', `View resume for ${name}`);
+      el.appendChild(a);
+    }
+    return el;
+  }
+
+  function fmtDate(d) {
+    const dt = new Date(d); if (isNaN(dt)) return d;
+    return dt.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  function isStale(d) { const dt = new Date(d); return !isNaN(dt) && (Date.now() - dt) / 864e5 > 730; }
+
+  function statusLine(text, query) {
+    const el = document.createElement('div'); el.className = 'status';
+    const t = document.createElement('span'); t.textContent = text; el.appendChild(t);
+    if (query) { const c = document.createElement('code'); c.textContent = query; c.title = 'Query sent to CATS'; el.appendChild(c); }
+    return el;
+  }
+  function skeleton() { const el = document.createElement('div'); el.className = 'skel'; el.setAttribute('aria-hidden', 'true'); return el; }
+  function typing() { const el = document.createElement('div'); el.className = 'typing'; el.setAttribute('aria-label', 'Thinking'); el.innerHTML = '<span></span><span></span><span></span>'; return el; }
+
+  // Plain text with **bold** and line breaks; everything else escaped.
+  function paragraphs(text) {
+    return text.trim().split(/\n{2,}/).map((block) => {
+      const p = document.createElement('p');
+      block.split(/(\*\*[^*]+\*\*)/g).forEach((seg) => {
+        if (/^\*\*[^*]+\*\*$/.test(seg)) { const b = document.createElement('strong'); b.textContent = seg.slice(2, -2); p.appendChild(b); }
+        else seg.split('\n').forEach((line, i) => { if (i) p.appendChild(document.createElement('br')); p.appendChild(document.createTextNode(line)); });
+      });
+      return p;
+    });
+  }
+})();
+</script>
+</body>
+</html>
