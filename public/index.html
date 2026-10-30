@@ -82,6 +82,13 @@
   .fact.muted b { color: var(--subtle); }
   .fact.loading { width: 92px; height: 23px; background: linear-gradient(90deg, var(--soft), #F8FAFC, var(--soft)); background-size: 200% 100%; animation: sh 1.2s infinite linear; }
   .facts .skills { flex-basis: 100%; font-size: 12.5px; color: var(--muted); }
+  .fact-note { font-size: 12px; color: var(--subtle); align-self: center; }
+  .fact-btn { font: inherit; font-size: 12.5px; font-weight: 600; color: var(--accent); background: none; border: 1px solid #99F6E4; border-radius: 999px; padding: 2px 10px; min-height: 26px; cursor: pointer; }
+  .fact-btn:hover { background: #F0FDFA; }
+  .more-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 2px; }
+  .more-info { font-size: 13px; color: var(--muted); }
+  .more { min-height: 44px; padding: 0 18px; border: 1px solid var(--line-strong); border-radius: 12px; background: #fff; font: inherit; font-size: 14px; font-weight: 600; color: var(--ink); cursor: pointer; }
+  .more:hover { background: var(--soft); }
   .skel { height: 72px; border-radius: 14px; background: linear-gradient(90deg, var(--soft), #F8FAFC, var(--soft)); background-size: 200% 100%; animation: sh 1.2s infinite linear; }
   @keyframes sh { to { background-position: -200% 0; } }
   .typing span { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: var(--subtle); animation: bl 1s infinite; }
@@ -171,6 +178,7 @@
     document.body.classList.add('chatting');
     input.value = ''; input.style.height = 'auto'; firstInput.value = '';
 
+    col.querySelectorAll('.more-row').forEach((r) => r.remove());
     const u = document.createElement('div'); u.className = 'msg-user'; u.textContent = text; col.appendChild(u);
     const ai = aiBubble(); col.appendChild(ai.el);
     scrollDown();
@@ -231,6 +239,7 @@
   // The agent writes: preamble [[SEARCH]]{json}[[/SEARCH]] intro [[CANDIDATES]][json][[/CANDIDATES]] outro
   function parseReply(raw, streaming) {
     const out = [];
+    let lastTotal = null;
     const sIdx = raw.indexOf('[[SEARCH]]');
     const cIdx = raw.indexOf('[[CANDIDATES]]');
     const hasMarkers = sIdx !== -1 || cIdx !== -1;
@@ -248,6 +257,7 @@
       const end = rest.indexOf('[[/SEARCH]]');
       if (end === -1) { out.push(statusLine('Searching CATS…')); out.push(skeleton()); return out; }
       const s = parseSearch(rest.slice(10, end));
+      lastTotal = s.total;
       out.push(statusLine(s.total != null ? `Searched CATS · ${s.total.toLocaleString()} matches` : 'Searched CATS', s.query));
       rest = rest.slice(end + 11);
     }
@@ -267,6 +277,7 @@
     else out.push(...paragraphs('No candidates could be read from this answer.'));
     const outro = rest.slice(cEnd + 15);
     if (outro.trim()) out.push(...paragraphs(outro));
+    if (!streaming && list.length && lastTotal && lastTotal > list.length) out.push(moreButton(list.length, lastTotal));
     return out;
   }
 
@@ -310,11 +321,15 @@
     return el;
   }
 
-  // ---------- quick facts from CATS (salary, experience, notice...) ----------
-  const profiles = new Map();
+  // ---------- quick facts: CATS fields first, then facts read from the resume ----------
+  const profiles = new Map();      // id -> CATS profile fields
+  const resumeFacts = new Map();   // id -> facts object, or 'loading'
+  const AUTO_RESUMES = 5;          // resumes read automatically per result list (CATS allows 500 calls/hour)
+
   async function enrichCards(root) {
     const cards = [...root.querySelectorAll('.card[data-id]')];
-    const need = [...new Set(cards.map((c) => c.dataset.id).filter((id) => /^\d+$/.test(id) && !profiles.has(id)))];
+    const ids = [...new Set(cards.map((c) => c.dataset.id).filter((id) => /^\d+$/.test(id)))];
+    const need = ids.filter((id) => !profiles.has(id));
     if (need.length) {
       try {
         const r = await fetch(`/api/profiles?ids=${need.join(',')}`);
@@ -323,36 +338,112 @@
         for (const p of data.profiles || []) profiles.set(String(p.id), p);
       } catch (_) { /* facts are optional; cards still work */ }
     }
-    for (const c of cards) {
-      const p = profiles.get(c.dataset.id);
-      if (p) fillFacts(c, p); else c.querySelector('.facts').replaceChildren();
-    }
+    ids.forEach(refill);
+    const gaps = ids.filter((id) => { const p = profiles.get(id) || {}; return !resumeFacts.has(id) && (!p.desired_pay || !p.experience); });
+    if (gaps.length) loadResumeFacts(gaps.slice(0, AUTO_RESUMES));
   }
+
+  async function loadResumeFacts(ids) {
+    ids.forEach((id) => { resumeFacts.set(id, 'loading'); refill(id); });
+    try {
+      const r = await fetch(`/api/resume-facts?ids=${ids.join(',')}`);
+      if (r.status === 401) { location.href = '/login'; return; }
+      const data = await r.json();
+      for (const f of data.facts || []) {
+        const id = String(f.id);
+        if (f.status === 'error' || f.status === 'limited') resumeFacts.set(id, { ...f, retry: true });
+        else resumeFacts.set(id, f);
+      }
+    } catch (_) {
+      ids.forEach((id) => resumeFacts.set(id, { status: 'error', retry: true }));
+    }
+    ids.forEach(refill);
+  }
+
+  function refill(id) {
+    document.querySelectorAll(`.card[data-id="${id}"]`).forEach((c) => fillFacts(c, profiles.get(id) || {}));
+  }
+
   function loadingFacts(el) {
     el.querySelector('.facts').replaceChildren(...[1, 2, 3].map(() => { const s = document.createElement('span'); s.className = 'fact loading'; s.setAttribute('aria-hidden', 'true'); return s; }));
   }
+
   function fillFacts(el, p) {
     const box = el.querySelector('.facts'); box.replaceChildren();
     if (!p || p.missing) return;
-    const add = (label, value, muted) => {
-      const s = document.createElement('span'); s.className = 'fact' + (muted ? ' muted' : '');
+    const id = el.dataset.id;
+    const rfRaw = resumeFacts.get(id);
+    const loading = rfRaw === 'loading';
+    const rf = rfRaw && rfRaw !== 'loading' && rfRaw.status === 'ok' ? rfRaw : null;
+    let usedResume = false;
+
+    const add = (label, value, opts = {}) => {
+      const s = document.createElement('span'); s.className = 'fact' + (opts.muted ? ' muted' : '');
+      if (opts.title) s.title = opts.title;
       if (label) { const b = document.createElement('b'); b.textContent = label + ' '; s.appendChild(b); }
       s.appendChild(document.createTextNode(value)); box.appendChild(s);
     };
-    add('Expected', p.desired_pay || 'not on file', !p.desired_pay);
-    add('Experience', p.experience || 'not on file', !p.experience);
-    if (p.current_pay) add('Current', p.current_pay);
-    if (p.notice_period) add('Notice', p.notice_period);
+    const pick = (catsVal, resumeKey) => {
+      if (catsVal) return { value: catsVal };
+      if (rf && rf[resumeKey]) { usedResume = true; return { value: rf[resumeKey], resume: true }; }
+      return null;
+    };
+    const missingText = rf ? 'not in resume' : 'not on file';
+    const keyFact = (label, v, title) => {
+      if (v) add(label, v.value, { title: v.resume ? title : undefined });
+      else if (loading) { const s = document.createElement('span'); s.className = 'fact loading'; s.setAttribute('aria-label', `Reading resume for ${label.toLowerCase()}`); box.appendChild(s); }
+      else add(label, missingText, { muted: true });
+    };
+
+    const expected = pick(p.desired_pay, 'expected_ctc');
+    const exp = pick(p.experience, 'experience');
+    keyFact('Expected', expected, 'Read from the resume');
+    keyFact('Experience', exp, rf && rf.experience_estimated ? 'Estimated from the job dates in the resume' : 'Read from the resume');
+    const cur = pick(p.current_pay, 'current_ctc'); if (cur) add('Current', cur.value);
+    const notice = pick(p.notice_period, 'notice'); if (notice) add('Notice', notice.value);
     if (p.date_available) add('Available', /^\d{4}-\d{2}/.test(p.date_available) ? fmtDate(p.date_available) : p.date_available);
     if (p.willing_to_relocate === true) add('', 'Open to relocate');
     if (p.willing_to_relocate === false) add('', 'Not relocating');
     const meta = el.querySelector('.meta').textContent;
     if (p.current_employer && !meta.includes(p.current_employer)) add('At', p.current_employer);
+
+    // Resume status / actions
+    if (loading) {
+      const n = document.createElement('span'); n.className = 'fact-note'; n.textContent = 'Reading resume…'; box.appendChild(n);
+    } else if (!rfRaw && (!expected || !exp)) {
+      box.appendChild(factButton('Check resume', () => loadResumeFacts([id])));
+    } else if (rfRaw && rfRaw !== 'loading') {
+      const notes = { no_resume: 'No resume on file', unreadable: 'Resume could not be read (scanned image?)', too_large: 'Resume file too large to read',
+        limited: 'CATS hourly limit nearly used, try later', error: 'Could not read the resume' };
+      if (notes[rfRaw.status]) { const n = document.createElement('span'); n.className = 'fact-note'; n.textContent = notes[rfRaw.status]; box.appendChild(n); }
+      if (rfRaw.retry) box.appendChild(factButton('Try again', () => loadResumeFacts([id])));
+      if (usedResume) {
+        const n = document.createElement('span'); n.className = 'fact-note';
+        n.textContent = rf && rf.experience_estimated && exp && exp.resume ? 'From resume (~ = estimated from job dates)' : 'From resume';
+        box.appendChild(n);
+      }
+    }
     if (p.key_skills) {
       const k = document.createElement('span'); k.className = 'skills';
       k.textContent = 'Skills: ' + (p.key_skills.length > 110 ? p.key_skills.slice(0, 110) + '…' : p.key_skills);
       box.appendChild(k);
     }
+  }
+  function factButton(text, onClick) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'fact-btn'; b.textContent = text;
+    b.addEventListener('click', onClick); return b;
+  }
+
+  // ---------- pagination ----------
+  function moreButton(shown, total) {
+    const wrap = document.createElement('div'); wrap.className = 'more-row';
+    const info = document.createElement('span'); info.className = 'more-info';
+    info.textContent = `${total.toLocaleString()} matches in total`;
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'more';
+    b.textContent = 'Show 10 more';
+    b.addEventListener('click', () => send('Show me the next 10 candidates for this same search (next page).'));
+    wrap.append(info, b);
+    return wrap;
   }
 
   function fmtDate(d) {

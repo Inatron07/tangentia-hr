@@ -1,12 +1,19 @@
 {
   "name": "hr-hub",
   "version": "1.0.0",
-  "description": "HR Hub: Talent copilot chat on top of the Automation Anywhere EKB agent and CATS ATS",
+  "description": "Tangentia HR Copilot: chat on the Automation Anywhere EKB agent and CATS ATS",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
+    "prestart": "[ -d node_modules/unpdf ] && [ -d node_modules/mammoth ] || npm install --omit=dev --no-audit --no-fund",
     "start": "node server.js",
     "mock": "MOCK=1 node server.js"
+  },
+  "dependencies": {
+    "mammoth": "^1.13.0",
+    "unpdf": "^1.9.1"
   }
 }

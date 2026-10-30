@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { resumeText, parseFacts } from './resume-facts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,6 +75,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/chat') return handleChat(req, res);
     if (req.method === 'GET' && url.pathname === '/api/profiles') return handleProfiles(res, url);
+    if (req.method === 'GET' && url.pathname === '/api/resume-facts') return handleResumeFacts(res, url);
     if (req.method === 'GET' && url.pathname === '/api/custom-fields') {
       // Names of the candidate custom fields defined in CATS (no candidate data).
       return json(res, 200, { fields: cfg.mock ? [] : [...(await customFieldNames()).values()] });
@@ -223,7 +225,6 @@ async function handleToolSearch(req, res, url) {
     .split(',').map((s) => s.trim()).filter((s) => s && !/^(any|none|null|all)$/i.test(s)).slice(0, 10);
 
   const qs = new URLSearchParams({ query, page: String(page), per_page: String(perPage) });
-  const headers = { Authorization: `Token ${cfg.catsKey}` };
   let r;
   if (cities.length) {
     // Goa is a state, not a city, so each name is matched against city OR state.
@@ -231,11 +232,11 @@ async function handleToolSearch(req, res, url) {
       { field: 'address.city', filter: 'contains', value: c },
       { field: 'address.state', filter: 'contains', value: c },
     ]) };
-    r = await fetch(`${CATS}/candidates/search?${qs}`, {
-      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(filter),
+    r = await catsFetch(`/candidates/search?${qs}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(filter),
     });
   } else {
-    r = await fetch(`${CATS}/candidates/search?${qs}`, { headers });
+    r = await catsFetch(`/candidates/search?${qs}`);
   }
   if (!r.ok) return json(res, 502, { error: `CATS returned ${r.status}` });
   const data = await r.json();
@@ -266,7 +267,7 @@ async function customFieldNames() {
   if (Date.now() - fieldNameCache.at < 3600_000) return fieldNameCache.map;
   const map = new Map();
   try {
-    const r = await fetch(`${CATS}/candidates/custom_fields?per_page=100`, { headers: { Authorization: `Token ${cfg.catsKey}` } });
+    const r = await catsFetch('/candidates/custom_fields?per_page=100');
     if (r.ok) for (const f of (await r.json())?._embedded?.custom_fields || []) map.set(String(f.id), f.name);
   } catch (err) { console.error('[cats] custom fields', err.message); }
   fieldNameCache = { at: Date.now(), map };
@@ -312,7 +313,7 @@ async function handleProfiles(res, url) {
   const out = await Promise.all(ids.map(async (id) => {
     const hit = profileCache.get(id);
     if (hit && Date.now() - hit.at < PROFILE_TTL) return hit.profile;
-    const r = await fetch(`${CATS}/candidates/${id}`, { headers: { Authorization: `Token ${cfg.catsKey}` } });
+    const r = await catsFetch(`/candidates/${id}`);
     if (!r.ok) return { id: Number(id), missing: true };
     const p = slimCandidate(await r.json(), names);
     cacheProfile(p);
@@ -334,21 +335,92 @@ function clampInt(v, dflt, min, max) {
 
 // ---------- resumes ----------
 // Finds the candidate's most recent resume attachment in CATS and streams the file.
-async function handleResume(res, candidateId, download) {
-  if (cfg.mock) return json(res, 501, { error: 'Resumes are not available in MOCK mode.' });
-  const auth = { Authorization: `Token ${cfg.catsKey}` };
+// CATS allows 500 calls/hour. Every CATS call goes through here so we know the remaining budget.
+const catsBudget = { remaining: null, at: 0 };
+async function catsFetch(pathAndQuery, init = {}) {
+  const r = await fetch(`${CATS}${pathAndQuery}`, { ...init, headers: { Authorization: `Token ${cfg.catsKey}`, ...(init.headers || {}) } });
+  const rem = r.headers.get('x-rate-limit-remaining');
+  if (rem !== null) { catsBudget.remaining = Number(rem); catsBudget.at = Date.now(); }
+  if (r.status === 429) { catsBudget.remaining = 0; catsBudget.at = Date.now(); }
+  return r;
+}
+function lowBudget() {
+  // Keep a reserve for searches and resume viewing; the budget refills over the hour.
+  return catsBudget.remaining !== null && Date.now() - catsBudget.at < 3600_000 && catsBudget.remaining < 80;
+}
 
-  const list = await fetch(`${CATS}/candidates/${candidateId}/attachments?per_page=100`, { headers: auth });
-  if (list.status === 404) return json(res, 404, { error: 'Candidate not found in CATS.' });
-  if (!list.ok) return json(res, 502, { error: `CATS returned ${list.status}.` });
+// Finds a candidate's most recent resume and opens the download.
+async function latestResume(candidateId) {
+  const list = await catsFetch(`/candidates/${candidateId}/attachments?per_page=100`);
+  if (list.status === 404) return { status: 404, error: 'Candidate not found in CATS.' };
+  if (!list.ok) return { status: 502, error: `CATS returned ${list.status}.` };
   const data = await list.json();
   const atts = data?._embedded?.attachments || data?._embedded?.activities || [];
   const resumes = atts.filter((a) => a.is_resume);
   const pick = (resumes.length ? resumes : atts).sort((a, b) => b.id - a.id)[0];
-  if (!pick) return json(res, 404, { error: 'This candidate has no resume on file.' });
+  if (!pick) return { status: 404, error: 'This candidate has no resume on file.' };
+  const file = await catsFetch(`/attachments/${pick.id}/download`, { redirect: 'follow' });
+  if (!file.ok || !file.body) return { status: 502, error: `Could not download the resume (CATS ${file.status}).` };
+  return { pick, file };
+}
 
-  const file = await fetch(`${CATS}/attachments/${pick.id}/download`, { headers: auth, redirect: 'follow' });
-  if (!file.ok || !file.body) return json(res, 502, { error: `Could not download the resume (CATS ${file.status}).` });
+// ---------- resume facts (experience, CTC, notice) ----------
+const factsCache = new Map(); // candidateId -> {at, value}
+const FACTS_TTL = 7 * 24 * 3600_000;
+const factsInFlight = new Map();
+
+async function resumeFactsFor(id) {
+  const hit = factsCache.get(id);
+  if (hit && Date.now() - hit.at < FACTS_TTL) return hit.value;
+  if (factsInFlight.has(id)) return factsInFlight.get(id);
+  const job = (async () => {
+    if (lowBudget()) return { id: Number(id), status: 'limited' };
+    let value;
+    try {
+      const found = await latestResume(id);
+      if (found.error) value = { id: Number(id), status: found.status === 404 ? 'no_resume' : 'error' };
+      else {
+        const len = Number(found.file.headers.get('content-length') || 0);
+        if (len > 10_000_000) { found.file.body?.cancel?.(); value = { id: Number(id), status: 'too_large' }; }
+        else {
+          const buf = await found.file.arrayBuffer();
+          const text = await resumeText(buf, found.pick.filename || '');
+          value = text.trim()
+            ? { id: Number(id), status: 'ok', file: found.pick.filename || null, ...parseFacts(text) }
+            : { id: Number(id), status: 'unreadable', file: found.pick.filename || null };
+        }
+      }
+    } catch (err) {
+      console.error('[resume-facts]', id, err.message);
+      value = { id: Number(id), status: 'error' };
+    }
+    if (value.status !== 'error') {
+      if (factsCache.size > 5000) factsCache.delete(factsCache.keys().next().value);
+      factsCache.set(id, { at: Date.now(), value });
+    }
+    return value;
+  })();
+  factsInFlight.set(id, job);
+  try { return await job; } finally { factsInFlight.delete(id); }
+}
+
+async function handleResumeFacts(res, url) {
+  const ids = [...new Set(String(url.searchParams.get('ids') || '').split(',').filter((s) => /^\d{1,15}$/.test(s)))].slice(0, 10);
+  if (!ids.length) return json(res, 400, { error: 'ids required' });
+  if (cfg.mock) {
+    await new Promise((r) => setTimeout(r, 700));
+    return json(res, 200, { facts: ids.map((id) => ({ id: Number(id), status: 'ok', experience: Number(id) % 2 ? '5 yrs' : '~3 yrs', experience_estimated: !(Number(id) % 2), expected_ctc: Number(id) % 3 ? '14 LPA' : null, current_ctc: '9 LPA', notice: '30 days' })) });
+  }
+  const out = [];
+  for (let i = 0; i < ids.length; i += 3) out.push(...await Promise.all(ids.slice(i, i + 3).map(resumeFactsFor)));
+  json(res, 200, { facts: out });
+}
+
+async function handleResume(res, candidateId, download) {
+  if (cfg.mock) return json(res, 501, { error: 'Resumes are not available in MOCK mode.' });
+  const found = await latestResume(candidateId);
+  if (found.error) return json(res, found.status, { error: found.error });
+  const { pick, file } = found;
 
   const name = String(pick.filename || `resume-${candidateId}.pdf`).replace(/[^\w.\- ]+/g, '_');
   const upstreamType = (file.headers.get('content-type') || '').split(';')[0].trim();
