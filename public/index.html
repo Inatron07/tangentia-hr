@@ -170,6 +170,7 @@
     let raw = '';
     try {
       const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, chatId }) });
+      if (res.status === 401) { location.href = '/login'; return; }
       if (!res.ok || !res.body) throw new Error((await res.json().catch(() => ({}))).error || `Request failed (${res.status})`);
       const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
       for (;;) {

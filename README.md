@@ -33,7 +33,7 @@ npm start                # http://localhost:3000
 | `EKB_PROJECT_ID` | `b5d379edc0134be588136d` (the CATS project) |
 | `EKB_AGENT_ID` | `66244` (Talent Copilot) |
 | `CATS_API_KEY` | CATS v3 key, used only to fetch resume files |
-| `APP_USER`, `APP_PASSWORD` | Sign-in for the page. Set a password before sharing the link. |
+| `APP_USER`, `APP_PASSWORD` | Login for the page (sign-in form, 12-hour session). Without a password the deployed app stays locked. |
 | `MOCK=1` | Sample replies without any keys, for UI testing |
 
 ## 3. Deploy

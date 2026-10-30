@@ -4,6 +4,7 @@
 // No dependencies: needs Node 18+ (built-in fetch, FormData, streams).
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -44,18 +45,26 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('HR Hub is locked: set APP_PASSWORD in the environment to open it.');
     }
-    if (!authorized(req)) {
-      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="HR Hub"', 'Content-Type': 'text/plain' });
-      return res.end('Sign in required');
-    }
     const url = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && url.pathname === '/healthz') return json(res, 200, { ok: true, mock: cfg.mock });
+    if (url.pathname === '/login') return handleLogin(req, res);
+    if (req.method === 'POST' && url.pathname === '/logout') {
+      res.writeHead(303, { 'Set-Cookie': sessionCookie(req, '', 0), Location: '/login' });
+      return res.end();
+    }
+    if (!authorized(req)) {
+      if (req.method === 'GET' && !url.pathname.startsWith('/api/')) {
+        res.writeHead(303, { Location: '/login' });
+        return res.end();
+      }
+      return json(res, 401, { error: 'Your session has expired. Please sign in again.' });
+    }
 
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
       const html = await readFile(path.join(__dirname, 'public', 'index.html'));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(html);
     }
-    if (req.method === 'GET' && url.pathname === '/healthz') return json(res, 200, { ok: true, mock: cfg.mock });
     if (req.method === 'POST' && url.pathname === '/api/chat') return handleChat(req, res);
 
     const m = url.pathname.match(/^\/api\/resume\/(\d{1,15})$/);
@@ -235,14 +244,72 @@ async function mockChat(message, send, res) {
   res.end();
 }
 
-// ---------- helpers ----------
+// ---------- sign-in (signed session cookie) ----------
+const SESSION_HOURS = 12;
+const COOKIE = 'hrhub_session';
+const attempts = new Map(); // ip -> {n, until}
+
+function sign(value) {
+  return crypto.createHmac('sha256', `hrhub:${cfg.appUser}:${cfg.appPassword}`).update(value).digest('base64url');
+}
+function sessionCookie(req, value, maxAge) {
+  const secure = (req.headers['x-forwarded-proto'] || '').includes('https') ? '; Secure' : '';
+  return `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+}
 function authorized(req) {
   if (!cfg.appPassword) return true;
-  const h = req.headers.authorization || '';
-  if (!h.startsWith('Basic ')) return false;
-  const [u, ...p] = Buffer.from(h.slice(6), 'base64').toString().split(':');
-  return u === cfg.appUser && p.join(':') === cfg.appPassword;
+  const raw = (req.headers.cookie || '').split(/;\s*/).find((c) => c.startsWith(`${COOKIE}=`));
+  if (!raw) return false;
+  const [exp, sig] = raw.slice(COOKIE.length + 1).split('.');
+  if (!exp || !sig || Number(exp) < Date.now()) return false;
+  return safeEqual(sig, sign(exp));
 }
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+async function handleLogin(req, res) {
+  if (!cfg.appPassword) { res.writeHead(303, { Location: '/' }); return res.end(); }
+  if (req.method === 'GET') return sendLoginPage(res, '');
+  if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
+
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const rec = attempts.get(ip);
+  if (rec && rec.n >= 8 && rec.until > Date.now()) return sendLoginPage(res, 'Too many attempts. Try again in 15 minutes.', 429);
+
+  let size = 0; const parts = [];
+  for await (const c of req) { size += c.length; if (size > 4000) break; parts.push(c); }
+  const form = new URLSearchParams(Buffer.concat(parts).toString());
+  const ok = safeEqual(form.get('user') || '', cfg.appUser) & safeEqual(form.get('password') || '', cfg.appPassword);
+  if (!ok) {
+    const r = rec && rec.until > Date.now() ? rec : { n: 0, until: Date.now() + 15 * 60_000 };
+    r.n += 1; attempts.set(ip, r);
+    await new Promise((r2) => setTimeout(r2, 600));
+    return sendLoginPage(res, 'Wrong username or password.', 401);
+  }
+  attempts.delete(ip);
+  const exp = String(Date.now() + SESSION_HOURS * 3600_000);
+  res.writeHead(303, { 'Set-Cookie': sessionCookie(req, `${exp}.${sign(exp)}`, SESSION_HOURS * 3600), Location: '/' });
+  res.end();
+}
+function sendLoginPage(res, error, status = 200) {
+  const err = error ? `<p class="err" role="alert">${error.replace(/[<>&"]/g, '')}</p>` : '';
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · HR Hub</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fff;color:#0F172A;font-family:Inter,system-ui,sans-serif;padding:24px}
+form{width:100%;max-width:380px;display:flex;flex-direction:column;gap:16px}.brand{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.logo{width:36px;height:36px;border-radius:10px;background:#0F172A;color:#fff;display:grid;place-items:center;font:800 14px Manrope,sans-serif}
+h1{margin:0;font:800 26px Manrope,sans-serif}label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600;color:#334155}
+input{height:48px;padding:0 14px;border:1px solid #CBD5E1;border-radius:12px;font:inherit;font-size:16px;font-weight:400;color:#0F172A}input:focus{outline:2px solid #0F766E;outline-offset:1px;border-color:#0F766E}
+button{height:48px;border:0;border-radius:12px;background:#0F766E;color:#fff;font:inherit;font-weight:600;font-size:16px;cursor:pointer}.err{margin:0;color:#9F1239;font-size:14px}</style></head>
+<body><form method="post" action="/login"><div class="brand"><div class="logo" aria-hidden="true">HR</div><h1>HR Hub</h1></div>${err}
+<label>Username<input name="user" autocomplete="username" required autofocus value="${cfg.appUser === 'hr' ? 'hr' : ''}"></label>
+<label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+<button type="submit">Sign in</button></form></body></html>`);
+}
+
+// ---------- helpers ----------
 function isLocal(req) {
   const a = req.socket.remoteAddress || '';
   return !req.headers['x-forwarded-for'] && (a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1');
