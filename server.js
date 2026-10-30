@@ -48,6 +48,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     if (req.method === 'GET' && url.pathname === '/healthz') return json(res, 200, { ok: true, mock: cfg.mock });
     if (url.pathname === '/login') return handleLogin(req, res);
+    if (req.method === 'GET' && url.pathname === '/tools/search') return handleToolSearch(req, res, url);
     if (req.method === 'POST' && url.pathname === '/logout') {
       res.writeHead(303, { 'Set-Cookie': sessionCookie(req, '', 0), Location: '/login' });
       return res.end();
@@ -191,6 +192,46 @@ async function ekb(endpoint, payload) {
   const text = await r.text();
   if (!r.ok) throw new Error(`EKB ${endpoint} ${r.status}: ${text.slice(0, 300)}`);
   return JSON.parse(text);
+}
+
+// ---------- tool endpoint for the EKB agent ----------
+// The EKB API tool calls this instead of CATS directly. It forwards the search to CATS
+// and returns only the fields the agent needs, so results are not truncated in EKB.
+// Auth: the same "Authorization: Token <CATS key>" header the tool already sends.
+async function handleToolSearch(req, res, url) {
+  if (!cfg.catsKey || !safeEqual(req.headers.authorization || '', `Token ${cfg.catsKey}`)) {
+    return json(res, 401, { error: 'Unauthorized' });
+  }
+  const query = String(url.searchParams.get('query') || '').slice(0, 1000);
+  if (!query.trim()) return json(res, 400, { error: 'query is required' });
+  const page = clampInt(url.searchParams.get('page'), 1, 1, 1000);
+  const perPage = clampInt(url.searchParams.get('per_page'), 25, 1, 100);
+
+  const qs = new URLSearchParams({ query, page: String(page), per_page: String(perPage) });
+  const r = await fetch(`${CATS}/candidates/search?${qs}`, { headers: { Authorization: `Token ${cfg.catsKey}` } });
+  if (!r.ok) return json(res, 502, { error: `CATS returned ${r.status}` });
+  const data = await r.json();
+  const list = data?._embedded?.candidates || [];
+  json(res, 200, {
+    query, page, per_page: perPage,
+    total: data.total ?? null,
+    total_pages: data.total != null ? Math.ceil(data.total / perPage) : null,
+    candidates: list.map((c) => ({
+      id: c.id,
+      name: [c.first_name, c.last_name].filter(Boolean).join(' '),
+      title: c.title || null,
+      current_employer: c.current_employer || null,
+      key_skills: c.key_skills ? String(c.key_skills).slice(0, 300) : null,
+      city: c.address?.city || null,
+      state: c.address?.state || null,
+      willing_to_relocate: c.is_willing_to_relocate ?? null,
+      updated: c.date_modified ? String(c.date_modified).slice(0, 10) : null,
+    })),
+  });
+}
+function clampInt(v, dflt, min, max) {
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
 }
 
 // ---------- resumes ----------
