@@ -50,6 +50,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/healthz') return json(res, 200, { ok: true, mock: cfg.mock });
     if (url.pathname === '/login') return handleLogin(req, res);
     if (req.method === 'GET' && url.pathname === '/tools/search') return handleToolSearch(req, res, url);
+    if (req.method === 'GET' && url.pathname === '/tools/resume-text') return handleToolResumeText(req, res, url);
     const asset = url.pathname.match(/^\/assets\/(tangentia-logo|tangentia-mark)\.png$/);
     if (req.method === 'GET' && asset) {
       const img = await readFile(path.join(__dirname, 'public', 'assets', `${asset[1]}.png`));
@@ -310,14 +311,15 @@ async function handleProfiles(res, url) {
   if (!ids.length) return json(res, 400, { error: 'ids required' });
   if (cfg.mock) return json(res, 200, { profiles: ids.map(mockProfile) });
   const names = await customFieldNames();
+  const withRead = (p) => ({ ...p, ai_read_at: aiRead.get(String(p.id)) || null });
   const out = await Promise.all(ids.map(async (id) => {
     const hit = profileCache.get(id);
-    if (hit && Date.now() - hit.at < PROFILE_TTL) return hit.profile;
+    if (hit && Date.now() - hit.at < PROFILE_TTL) return withRead(hit.profile);
     const r = await catsFetch(`/candidates/${id}`);
     if (!r.ok) return { id: Number(id), missing: true };
     const p = slimCandidate(await r.json(), names);
     cacheProfile(p);
-    return p;
+    return withRead(p);
   }));
   json(res, 200, { profiles: out });
 }
@@ -326,7 +328,7 @@ function mockProfile(id) {
   const n = Number(id);
   return { id: n, current_employer: n % 2 ? 'Sample Tech Pvt Ltd' : null, current_pay: n % 2 ? '8 LPA' : null,
     desired_pay: n % 3 ? '12 LPA' : null, experience: n % 3 ? `${(n % 7) + 2} years` : null, notice_period: n % 2 ? '30 days' : null,
-    willing_to_relocate: n % 2 === 0, date_available: null, key_skills: 'React, TypeScript, Node.js', custom_fields: {} };
+    willing_to_relocate: n % 2 === 0, date_available: null, key_skills: 'React, TypeScript, Node.js', custom_fields: {}, ai_read_at: n % 2 ? Date.now() : null };
 }
 function clampInt(v, dflt, min, max) {
   const n = Number.parseInt(v, 10);
@@ -365,17 +367,21 @@ async function latestResume(candidateId) {
 }
 
 // ---------- resume facts (experience, CTC, notice) ----------
-const factsCache = new Map(); // candidateId -> {at, value}
+const factsCache = new Map(); // candidateId -> {at, value}   (facts + status, small)
+const textCache = new Map();  // candidateId -> {at, text}    (resume text for the agent, capped)
 const FACTS_TTL = 7 * 24 * 3600_000;
-const factsInFlight = new Map();
+const TEXT_MAX = 12_000;
+const inFlight = new Map();
 
-async function resumeFactsFor(id) {
-  const hit = factsCache.get(id);
-  if (hit && Date.now() - hit.at < FACTS_TTL) return hit.value;
-  if (factsInFlight.has(id)) return factsInFlight.get(id);
+// Reads a candidate's latest resume once and caches both the facts and the text.
+async function readResume(id, { needText = false } = {}) {
+  const f = factsCache.get(id), t = textCache.get(id);
+  const fresh = (e) => e && Date.now() - e.at < FACTS_TTL;
+  if (fresh(f) && (!needText || fresh(t) || f.value.status !== 'ok')) return { value: f.value, text: fresh(t) ? t.text : null };
+  if (inFlight.has(id)) return inFlight.get(id);
   const job = (async () => {
-    if (lowBudget()) return { id: Number(id), status: 'limited' };
-    let value;
+    if (lowBudget()) return { value: { id: Number(id), status: 'limited' }, text: null };
+    let value, text = null;
     try {
       const found = await latestResume(id);
       if (found.error) value = { id: Number(id), status: found.status === 404 ? 'no_resume' : 'error' };
@@ -384,24 +390,61 @@ async function resumeFactsFor(id) {
         if (len > 10_000_000) { found.file.body?.cancel?.(); value = { id: Number(id), status: 'too_large' }; }
         else {
           const buf = await found.file.arrayBuffer();
-          const text = await resumeText(buf, found.pick.filename || '');
-          value = text.trim()
-            ? { id: Number(id), status: 'ok', file: found.pick.filename || null, ...parseFacts(text) }
-            : { id: Number(id), status: 'unreadable', file: found.pick.filename || null };
+          const raw = await resumeText(buf, found.pick.filename || '');
+          if (raw.trim()) {
+            text = raw.replace(/[ \t\u00a0]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, TEXT_MAX);
+            value = { id: Number(id), status: 'ok', file: found.pick.filename || null, ...parseFacts(raw) };
+          } else value = { id: Number(id), status: 'unreadable', file: found.pick.filename || null };
         }
       }
     } catch (err) {
-      console.error('[resume-facts]', id, err.message);
+      console.error('[resume]', id, err.message);
       value = { id: Number(id), status: 'error' };
     }
     if (value.status !== 'error') {
       if (factsCache.size > 5000) factsCache.delete(factsCache.keys().next().value);
       factsCache.set(id, { at: Date.now(), value });
+      if (text) {
+        if (textCache.size > 400) textCache.delete(textCache.keys().next().value);
+        textCache.set(id, { at: Date.now(), text });
+      }
     }
-    return value;
+    return { value, text };
   })();
-  factsInFlight.set(id, job);
-  try { return await job; } finally { factsInFlight.delete(id); }
+  inFlight.set(id, job);
+  try { return await job; } finally { inFlight.delete(id); }
+}
+async function resumeFactsFor(id) { return (await readResume(id)).value; }
+
+// Candidates whose resume the copilot itself read, so the cards can say so.
+const aiRead = new Map(); // candidateId -> timestamp
+function markAiRead(id) {
+  if (aiRead.size > 5000) aiRead.delete(aiRead.keys().next().value);
+  aiRead.set(String(id), Date.now());
+}
+
+// EKB tool: the agent reads one resume. Same auth as /tools/search.
+async function handleToolResumeText(req, res, url) {
+  if (!cfg.catsKey || !safeEqual(req.headers.authorization || '', `Token ${cfg.catsKey}`)) {
+    return json(res, 401, { error: 'Unauthorized' });
+  }
+  const id = String(url.searchParams.get('candidate_id') || '').trim();
+  if (!/^\d{1,15}$/.test(id)) return json(res, 400, { error: 'candidate_id must be a CATS candidate id number' });
+  const { value, text } = await readResume(id, { needText: true });
+  if (value.status !== 'ok' || !text) {
+    const why = { no_resume: 'This candidate has no resume on file.', unreadable: 'The resume could not be read (probably a scanned image).',
+      too_large: 'The resume file is too large to read.', limited: 'CATS hourly API limit is nearly used up. Try again later.',
+      error: 'The resume could not be fetched right now.' }[value.status] || 'The resume could not be read.';
+    return json(res, 200, { candidate_id: Number(id), status: value.status, message: why });
+  }
+  markAiRead(id);
+  const { status, file, experience, experience_estimated, current_ctc, expected_ctc, notice } = value;
+  json(res, 200, {
+    candidate_id: Number(id), status, file,
+    facts: { experience, experience_estimated, current_ctc, expected_ctc, notice },
+    truncated: text.length >= TEXT_MAX,
+    resume_text: text,
+  });
 }
 
 async function handleResumeFacts(res, url) {

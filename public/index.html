@@ -74,6 +74,10 @@
   .card .stale { display: inline-block; font-size: 12px; font-weight: 600; color: var(--warn-ink); background: var(--warn-bg); border-radius: 999px; padding: 1px 8px; margin-left: 4px; }
   .card .open { min-height: 40px; padding: 0 14px; display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
   .card .open:hover { background: var(--soft); }
+  .card .actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+  .ai-read { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 5px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: #6B21A8; white-space: nowrap;
+    background: linear-gradient(#fff, #fff) padding-box, linear-gradient(90deg, #38BDF8, #A21CAF, #F97316) border-box; border: 1.5px solid transparent; cursor: default; }
+  .ai-read img { width: 16px; height: 16px; object-fit: contain; }
   .facts { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
   .facts:empty { display: none; }
   .fact { font-size: 12.5px; line-height: 1.4; padding: 3px 10px; border-radius: 999px; background: var(--soft); color: #334155; }
@@ -99,7 +103,7 @@
     header { padding: 12px 16px; }
     .brand .sep, .brand .mod { display: none; }
     #log { padding: 20px 16px; } .dock { padding: 10px 16px 16px; }
-    .card { flex-wrap: wrap; } .card .info { flex: 1 1 calc(100% - 54px); } .card .open { margin-left: 54px; }
+    .card { flex-wrap: wrap; } .card .info { flex: 1 1 calc(100% - 54px); } .card .actions { margin-left: 54px; flex-direction: row; align-items: center; flex-wrap: wrap; }
     .msg-user { max-width: 90%; }
   }
   @media (prefers-reduced-motion: reduce) { .skel, .typing span, .fact.loading { animation: none; } }
@@ -311,10 +315,12 @@
     if (stale) { const b = document.createElement('span'); b.className = 'stale'; b.textContent = 'over 2 years old'; metaEl.appendChild(b); }
     if (c.why) el.querySelector('.why').textContent = c.why; else el.querySelector('.why').remove();
     if (c.id && /^\d+$/.test(String(c.id))) {
+      const actions = document.createElement('div'); actions.className = 'actions';
       const a = document.createElement('a'); a.className = 'open'; a.textContent = 'View resume';
       a.href = `/api/resume/${c.id}`; a.target = '_blank'; a.rel = 'noopener';
       a.setAttribute('aria-label', `View resume for ${name}`);
-      el.appendChild(a);
+      actions.appendChild(a);
+      el.appendChild(actions);
     }
     const known = profiles.get(String(c.id));
     if (known) fillFacts(el, known); else if (c.id) loadingFacts(el);
@@ -372,6 +378,7 @@
     const box = el.querySelector('.facts'); box.replaceChildren();
     if (!p || p.missing) return;
     const id = el.dataset.id;
+    aiBadge(el, p.ai_read_at);
     const rfRaw = resumeFacts.get(id);
     const loading = rfRaw === 'loading';
     const rf = rfRaw && rfRaw !== 'loading' && rfRaw.status === 'ok' ? rfRaw : null;
@@ -428,6 +435,16 @@
       k.textContent = 'Skills: ' + (p.key_skills.length > 110 ? p.key_skills.slice(0, 110) + '…' : p.key_skills);
       box.appendChild(k);
     }
+  }
+  // "Read by Copilot" badge: shown when the agent itself opened and read this resume.
+  function aiBadge(el, readAt) {
+    const actions = el.querySelector('.actions'); if (!actions) return;
+    actions.querySelector('.ai-read')?.remove();
+    if (!readAt) return;
+    const b = document.createElement('span'); b.className = 'ai-read';
+    b.title = 'HR Copilot opened and read this resume while answering, so its summary is based on the resume itself.';
+    b.innerHTML = '<img src="/assets/tangentia-mark.png" alt="" aria-hidden="true"><span>Read by Copilot</span>';
+    actions.appendChild(b);
   }
   function factButton(text, onClick) {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'fact-btn'; b.textContent = text;
