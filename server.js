@@ -49,6 +49,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/healthz') return json(res, 200, { ok: true, mock: cfg.mock });
     if (url.pathname === '/login') return handleLogin(req, res);
     if (req.method === 'GET' && url.pathname === '/tools/search') return handleToolSearch(req, res, url);
+    const asset = url.pathname.match(/^\/assets\/(tangentia-logo|tangentia-mark)\.png$/);
+    if (req.method === 'GET' && asset) {
+      const img = await readFile(path.join(__dirname, 'public', 'assets', `${asset[1]}.png`));
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+      return res.end(img);
+    }
     if (req.method === 'POST' && url.pathname === '/logout') {
       res.writeHead(303, { 'Set-Cookie': sessionCookie(req, '', 0), Location: '/login' });
       return res.end();
@@ -67,6 +73,11 @@ const server = http.createServer(async (req, res) => {
       return res.end(html);
     }
     if (req.method === 'POST' && url.pathname === '/api/chat') return handleChat(req, res);
+    if (req.method === 'GET' && url.pathname === '/api/profiles') return handleProfiles(res, url);
+    if (req.method === 'GET' && url.pathname === '/api/custom-fields') {
+      // Names of the candidate custom fields defined in CATS (no candidate data).
+      return json(res, 200, { fields: cfg.mock ? [] : [...(await customFieldNames()).values()] });
+    }
 
     const m = url.pathname.match(/^\/api\/resume\/(\d{1,15})$/);
     if (req.method === 'GET' && m) return handleResume(res, m[1], url.searchParams.get('download') === '1');
@@ -229,22 +240,92 @@ async function handleToolSearch(req, res, url) {
   if (!r.ok) return json(res, 502, { error: `CATS returned ${r.status}` });
   const data = await r.json();
   const list = data?._embedded?.candidates || [];
+  const names = await customFieldNames();
+  const candidates = list.map((c) => slimCandidate(c, names));
+  for (const c of candidates) cacheProfile(c);
   json(res, 200, {
     query, city_filter: cities.length ? cities : null, page, per_page: perPage,
     total: data.total ?? null,
     total_pages: data.total != null ? Math.ceil(data.total / perPage) : null,
-    candidates: list.map((c) => ({
-      id: c.id,
-      name: [c.first_name, c.last_name].filter(Boolean).join(' '),
-      title: c.title || null,
-      current_employer: c.current_employer || null,
-      key_skills: c.key_skills ? String(c.key_skills).slice(0, 300) : null,
-      city: c.address?.city || null,
-      state: c.address?.state || null,
-      willing_to_relocate: c.is_willing_to_relocate ?? null,
-      updated: c.date_modified ? String(c.date_modified).slice(0, 10) : null,
-    })),
+    candidates,
   });
+}
+
+// ---------- candidate profiles (quick facts for the cards) ----------
+// The agent's cards are enriched with facts read straight from CATS, so salary,
+// experience etc. are exact rather than retold by the model.
+const profileCache = new Map(); // id -> {at, profile}
+const PROFILE_TTL = 6 * 3600_000;
+function cacheProfile(p) {
+  if (profileCache.size > 5000) profileCache.delete(profileCache.keys().next().value);
+  profileCache.set(String(p.id), { at: Date.now(), profile: p });
+}
+
+let fieldNameCache = { at: 0, map: new Map() };
+async function customFieldNames() {
+  if (Date.now() - fieldNameCache.at < 3600_000) return fieldNameCache.map;
+  const map = new Map();
+  try {
+    const r = await fetch(`${CATS}/candidates/custom_fields?per_page=100`, { headers: { Authorization: `Token ${cfg.catsKey}` } });
+    if (r.ok) for (const f of (await r.json())?._embedded?.custom_fields || []) map.set(String(f.id), f.name);
+  } catch (err) { console.error('[cats] custom fields', err.message); }
+  fieldNameCache = { at: Date.now(), map };
+  return map;
+}
+
+function slimCandidate(c, names) {
+  const custom = {};
+  for (const f of c?._embedded?.custom_fields || []) {
+    const v = f.value;
+    if (v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length)) continue;
+    const name = names.get(String(f.id)) || f?._embedded?.definition?.name || `field_${f.id}`;
+    custom[name] = Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : String(v).slice(0, 120);
+  }
+  const pick = (re) => { const k = Object.keys(custom).find((n) => re.test(n)); return k ? custom[k] : null; };
+  return {
+    id: c.id,
+    name: [c.first_name, c.last_name].filter(Boolean).join(' '),
+    title: c.title || null,
+    current_employer: c.current_employer || null,
+    key_skills: c.key_skills ? String(c.key_skills).slice(0, 300) : null,
+    city: c.address?.city || null,
+    state: c.address?.state || null,
+    willing_to_relocate: c.is_willing_to_relocate ?? null,
+    current_pay: c.current_pay || pick(/current\s*(ctc|pay|salary)/i),
+    desired_pay: c.desired_pay || pick(/(expected|desired)\s*(ctc|pay|salary)/i),
+    experience: pick(/exp(erience)?|yoe|years/i),
+    notice_period: pick(/notice/i),
+    date_available: c.date_available || null,
+    source: c.source || null,
+    is_hot: !!c.is_hot,
+    created: c.date_created ? String(c.date_created).slice(0, 10) : null,
+    updated: c.date_modified ? String(c.date_modified).slice(0, 10) : null,
+    custom_fields: custom,
+  };
+}
+
+async function handleProfiles(res, url) {
+  const ids = String(url.searchParams.get('ids') || '').split(',').filter((s) => /^\d{1,15}$/.test(s)).slice(0, 25);
+  if (!ids.length) return json(res, 400, { error: 'ids required' });
+  if (cfg.mock) return json(res, 200, { profiles: ids.map(mockProfile) });
+  const names = await customFieldNames();
+  const out = await Promise.all(ids.map(async (id) => {
+    const hit = profileCache.get(id);
+    if (hit && Date.now() - hit.at < PROFILE_TTL) return hit.profile;
+    const r = await fetch(`${CATS}/candidates/${id}`, { headers: { Authorization: `Token ${cfg.catsKey}` } });
+    if (!r.ok) return { id: Number(id), missing: true };
+    const p = slimCandidate(await r.json(), names);
+    cacheProfile(p);
+    return p;
+  }));
+  json(res, 200, { profiles: out });
+}
+
+function mockProfile(id) {
+  const n = Number(id);
+  return { id: n, current_employer: n % 2 ? 'Sample Tech Pvt Ltd' : null, current_pay: n % 2 ? '8 LPA' : null,
+    desired_pay: n % 3 ? '12 LPA' : null, experience: n % 3 ? `${(n % 7) + 2} years` : null, notice_period: n % 2 ? '30 days' : null,
+    willing_to_relocate: n % 2 === 0, date_available: null, key_skills: 'React, TypeScript, Node.js', custom_fields: {} };
 }
 function clampInt(v, dflt, min, max) {
   const n = Number.parseInt(v, 10);
@@ -354,15 +435,15 @@ async function handleLogin(req, res) {
 function sendLoginPage(res, error, status = 200) {
   const err = error ? `<p class="err" role="alert">${error.replace(/[<>&"]/g, '')}</p>` : '';
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · HR Hub</title>
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · HR Copilot · Tangentia</title>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fff;color:#0F172A;font-family:Inter,system-ui,sans-serif;padding:24px}
 form{width:100%;max-width:380px;display:flex;flex-direction:column;gap:16px}.brand{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .logo{width:36px;height:36px;border-radius:10px;background:#0F172A;color:#fff;display:grid;place-items:center;font:800 14px Manrope,sans-serif}
-h1{margin:0;font:800 26px Manrope,sans-serif}label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600;color:#334155}
+h1{margin:0;font:700 22px Manrope,sans-serif}label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600;color:#334155}
 input{height:48px;padding:0 14px;border:1px solid #CBD5E1;border-radius:12px;font:inherit;font-size:16px;font-weight:400;color:#0F172A}input:focus{outline:2px solid #0F766E;outline-offset:1px;border-color:#0F766E}
 button{height:48px;border:0;border-radius:12px;background:#0F766E;color:#fff;font:inherit;font-weight:600;font-size:16px;cursor:pointer}.err{margin:0;color:#9F1239;font-size:14px}</style></head>
-<body><form method="post" action="/login"><div class="brand"><div class="logo" aria-hidden="true">HR</div><h1>HR Hub</h1></div>${err}
+<body><form method="post" action="/login"><div class="brand"><img src="/assets/tangentia-logo.png" alt="Tangentia" style="height:30px;width:auto"><span style="color:#CBD5E1;font-size:22px" aria-hidden="true">/</span><h1>HR Copilot</h1></div>${err}
 <label>Username<input name="user" autocomplete="username" required autofocus value="${cfg.appUser === 'hr' ? 'hr' : ''}"></label>
 <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
 <button type="submit">Sign in</button></form></body></html>`);

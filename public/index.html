@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HR Hub · Talent copilot</title>
+<title>HR Copilot · Tangentia</title>
+<link rel="icon" href="/assets/tangentia-mark.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -22,10 +23,9 @@
   header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; border-bottom: 1px solid transparent; }
   body.chatting header { border-bottom-color: var(--soft); }
   .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .logo { width: 32px; height: 32px; border-radius: 9px; background: var(--ink); color: #fff; display: grid; place-items: center; font: 800 13px Manrope, sans-serif; flex-shrink: 0; }
-  .brand b { font: 700 16px Manrope, sans-serif; }
-  .brand .sep { color: var(--line-strong); }
-  .brand .mod { color: var(--muted); font-size: 15px; white-space: nowrap; }
+  .brand-logo { height: 26px; width: auto; display: block; flex-shrink: 0; }
+  .brand .sep { color: var(--line-strong); font-size: 20px; }
+  .brand .mod { font: 700 16px Manrope, sans-serif; white-space: nowrap; }
   .new-chat { display: none; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
   body.chatting .new-chat { display: inline-flex; }
   .new-chat:hover { background: var(--soft); }
@@ -58,7 +58,7 @@
 
   .msg-user { align-self: flex-end; max-width: 80%; background: var(--soft); padding: 12px 16px; border-radius: 18px 18px 4px 18px; font-size: 15px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
   .msg-ai { display: flex; gap: 12px; align-items: flex-start; }
-  .msg-ai .av { width: 32px; height: 32px; border-radius: 9px; background: var(--accent); color: #fff; display: grid; place-items: center; font: 800 12px Manrope, sans-serif; flex-shrink: 0; }
+  .msg-ai .av { width: 32px; height: 32px; flex-shrink: 0; object-fit: contain; margin-top: 2px; }
   .msg-ai .body { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; font-size: 15px; line-height: 1.6; }
   .msg-ai .body p { margin: 0; overflow-wrap: anywhere; }
   .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
@@ -74,6 +74,14 @@
   .card .stale { display: inline-block; font-size: 12px; font-weight: 600; color: var(--warn-ink); background: var(--warn-bg); border-radius: 999px; padding: 1px 8px; margin-left: 4px; }
   .card .open { min-height: 40px; padding: 0 14px; display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
   .card .open:hover { background: var(--soft); }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+  .facts:empty { display: none; }
+  .fact { font-size: 12.5px; line-height: 1.4; padding: 3px 10px; border-radius: 999px; background: var(--soft); color: #334155; }
+  .fact b { font-weight: 600; color: var(--ink); }
+  .fact.muted { background: #fff; color: var(--subtle); border: 1px dashed var(--line-strong); }
+  .fact.muted b { color: var(--subtle); }
+  .fact.loading { width: 92px; height: 23px; background: linear-gradient(90deg, var(--soft), #F8FAFC, var(--soft)); background-size: 200% 100%; animation: sh 1.2s infinite linear; }
+  .facts .skills { flex-basis: 100%; font-size: 12.5px; color: var(--muted); }
   .skel { height: 72px; border-radius: 14px; background: linear-gradient(90deg, var(--soft), #F8FAFC, var(--soft)); background-size: 200% 100%; animation: sh 1.2s infinite linear; }
   @keyframes sh { to { background-position: -200% 0; } }
   .typing span { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: var(--subtle); animation: bl 1s infinite; }
@@ -87,14 +95,14 @@
     .card { flex-wrap: wrap; } .card .info { flex: 1 1 calc(100% - 54px); } .card .open { margin-left: 54px; }
     .msg-user { max-width: 90%; }
   }
-  @media (prefers-reduced-motion: reduce) { .skel, .typing span { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .skel, .typing span, .fact.loading { animation: none; } }
 </style>
 </head>
 <body>
 <header>
   <div class="brand">
-    <div class="logo" aria-hidden="true">HR</div>
-    <b>HR Hub</b><span class="sep" aria-hidden="true">/</span><span class="mod">Talent copilot</span>
+    <img class="brand-logo" src="/assets/tangentia-logo.png" alt="Tangentia">
+    <span class="sep" aria-hidden="true">/</span><span class="mod">HR Copilot</span>
   </div>
   <button type="button" class="new-chat" id="newChat">
     <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New chat
@@ -108,7 +116,7 @@
       <p>Describe the role. I'll search every resume in CATS and shortlist the best fits.</p>
     </div>
     <form class="composer" id="firstForm">
-      <label for="firstInput" class="sr">Message the talent copilot</label>
+      <label for="firstInput" class="sr">Message HR Copilot</label>
       <textarea id="firstInput" rows="3" placeholder="e.g. Need 3 React developers in Goa or Pune, updated in the last year"></textarea>
       <div class="row">
         <button class="send" type="submit" aria-label="Send">
@@ -124,7 +132,7 @@
   <div class="dock">
     <div style="width:100%;max-width:760px">
       <form class="composer" id="form">
-        <label for="input" class="sr">Message the talent copilot</label>
+        <label for="input" class="sr">Message HR Copilot</label>
         <textarea id="input" rows="1" placeholder="Ask a follow-up"></textarea>
         <button class="send" id="sendBtn" type="submit" aria-label="Send">
           <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
@@ -189,6 +197,7 @@
       }
       ai.render(raw, false);
       if (!raw.trim()) ai.error('No answer came back. Please try again.');
+      enrichCards(ai.el);
     } catch (err) {
       ai.render(raw, false);
       ai.error(err.message || 'Something went wrong.');
@@ -205,7 +214,7 @@
   // ---------- assistant message rendering ----------
   function aiBubble() {
     const el = document.createElement('div'); el.className = 'msg-ai';
-    el.innerHTML = '<div class="av" aria-hidden="true">AI</div><div class="body"><div class="typing" aria-label="Thinking"><span></span><span></span><span></span></div></div>';
+    el.innerHTML = '<img class="av" src="/assets/tangentia-mark.png" alt="" aria-hidden="true"><div class="body"><div class="typing" aria-label="Thinking"><span></span><span></span><span></span></div></div>';
     const body = el.querySelector('.body');
     let errEl = null;
     return {
@@ -283,7 +292,8 @@
     const ini = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
     const meta = [c.title, c.city, c.updated ? `updated ${fmtDate(c.updated)}` : null].filter(Boolean).join(' · ');
     const stale = isStale(c.updated);
-    el.innerHTML = `<div class="ini" aria-hidden="true"></div><div class="info"><span class="name"></span><span class="meta"></span><span class="why"></span></div>`;
+    el.innerHTML = `<div class="ini" aria-hidden="true"></div><div class="info"><span class="name"></span><span class="meta"></span><div class="facts"></div><span class="why"></span></div>`;
+    if (c.id) el.dataset.id = String(c.id);
     el.querySelector('.ini').textContent = ini;
     el.querySelector('.name').textContent = name;
     const metaEl = el.querySelector('.meta'); metaEl.textContent = meta || 'Profile details not on file';
@@ -295,7 +305,54 @@
       a.setAttribute('aria-label', `View resume for ${name}`);
       el.appendChild(a);
     }
+    const known = profiles.get(String(c.id));
+    if (known) fillFacts(el, known); else if (c.id) loadingFacts(el);
     return el;
+  }
+
+  // ---------- quick facts from CATS (salary, experience, notice...) ----------
+  const profiles = new Map();
+  async function enrichCards(root) {
+    const cards = [...root.querySelectorAll('.card[data-id]')];
+    const need = [...new Set(cards.map((c) => c.dataset.id).filter((id) => /^\d+$/.test(id) && !profiles.has(id)))];
+    if (need.length) {
+      try {
+        const r = await fetch(`/api/profiles?ids=${need.join(',')}`);
+        if (r.status === 401) { location.href = '/login'; return; }
+        const data = await r.json();
+        for (const p of data.profiles || []) profiles.set(String(p.id), p);
+      } catch (_) { /* facts are optional; cards still work */ }
+    }
+    for (const c of cards) {
+      const p = profiles.get(c.dataset.id);
+      if (p) fillFacts(c, p); else c.querySelector('.facts').replaceChildren();
+    }
+  }
+  function loadingFacts(el) {
+    el.querySelector('.facts').replaceChildren(...[1, 2, 3].map(() => { const s = document.createElement('span'); s.className = 'fact loading'; s.setAttribute('aria-hidden', 'true'); return s; }));
+  }
+  function fillFacts(el, p) {
+    const box = el.querySelector('.facts'); box.replaceChildren();
+    if (!p || p.missing) return;
+    const add = (label, value, muted) => {
+      const s = document.createElement('span'); s.className = 'fact' + (muted ? ' muted' : '');
+      if (label) { const b = document.createElement('b'); b.textContent = label + ' '; s.appendChild(b); }
+      s.appendChild(document.createTextNode(value)); box.appendChild(s);
+    };
+    add('Expected', p.desired_pay || 'not on file', !p.desired_pay);
+    add('Experience', p.experience || 'not on file', !p.experience);
+    if (p.current_pay) add('Current', p.current_pay);
+    if (p.notice_period) add('Notice', p.notice_period);
+    if (p.date_available) add('Available', /^\d{4}-\d{2}/.test(p.date_available) ? fmtDate(p.date_available) : p.date_available);
+    if (p.willing_to_relocate === true) add('', 'Open to relocate');
+    if (p.willing_to_relocate === false) add('', 'Not relocating');
+    const meta = el.querySelector('.meta').textContent;
+    if (p.current_employer && !meta.includes(p.current_employer)) add('At', p.current_employer);
+    if (p.key_skills) {
+      const k = document.createElement('span'); k.className = 'skills';
+      k.textContent = 'Skills: ' + (p.key_skills.length > 110 ? p.key_skills.slice(0, 110) + '…' : p.key_skills);
+      box.appendChild(k);
+    }
   }
 
   function fmtDate(d) {
