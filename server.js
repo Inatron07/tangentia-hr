@@ -40,6 +40,10 @@ const CATS = 'https://api.catsone.com/v3';
 // ---------- server ----------
 const server = http.createServer(async (req, res) => {
   try {
+    if (!cfg.mock && !cfg.appPassword && !isLocal(req) && new URL(req.url, 'http://x').pathname !== '/healthz') {
+      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end('HR Hub is locked: set APP_PASSWORD in the environment to open it.');
+    }
     if (!authorized(req)) {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="HR Hub"', 'Content-Type': 'text/plain' });
       return res.end('Sign in required');
@@ -238,6 +242,10 @@ function authorized(req) {
   if (!h.startsWith('Basic ')) return false;
   const [u, ...p] = Buffer.from(h.slice(6), 'base64').toString().split(':');
   return u === cfg.appUser && p.join(':') === cfg.appPassword;
+}
+function isLocal(req) {
+  const a = req.socket.remoteAddress || '';
+  return !req.headers['x-forwarded-for'] && (a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1');
 }
 function json(res, status, obj) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
