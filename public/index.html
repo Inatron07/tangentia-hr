@@ -404,7 +404,7 @@
 
     const expected = pick(p.desired_pay, 'expected_ctc');
     const exp = pick(p.experience, 'experience');
-    keyFact('Expected', expected, 'Read from the resume');
+    if (expected) add('Expected', expected.value, { title: expected.resume ? 'Read from the resume' : undefined });
     keyFact('Experience', exp, rf && rf.experience_estimated ? 'Estimated from the job dates in the resume' : 'Read from the resume');
     const cur = pick(p.current_pay, 'current_ctc'); if (cur) add('Current', cur.value);
     const notice = pick(p.notice_period, 'notice'); if (notice) add('Notice', notice.value);
