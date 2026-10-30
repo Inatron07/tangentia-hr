@@ -212,7 +212,8 @@ async function handleResume(res, candidateId, download) {
   if (!file.ok || !file.body) return json(res, 502, { error: `Could not download the resume (CATS ${file.status}).` });
 
   const name = String(pick.filename || `resume-${candidateId}.pdf`).replace(/[^\w.\- ]+/g, '_');
-  const type = file.headers.get('content-type') || guessType(name);
+  const upstreamType = (file.headers.get('content-type') || '').split(';')[0].trim();
+  const type = !upstreamType || upstreamType === 'application/octet-stream' ? guessType(name) : upstreamType;
   res.writeHead(200, {
     'Content-Type': type,
     'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${name}"`,
